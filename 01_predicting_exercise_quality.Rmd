@@ -1,0 +1,357 @@
+---
+title: "Predicting Quality of Exercise Activities"
+author: "David Gonzalez"
+date: "2024-05-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+The goal of this project is to build a classification model that predicts whether a barbell weightlifting exercise was performed correctly based on a set of predictors that measure weightlifters' movements. 
+
+After training and comparing several models, I selected a random forest model with predicted out-of-sample accuracy of 99.72%.
+
+In the sections that follow, I describe the criteria behind data cleaning and model building, as well as the strategy followed to estimate out-of-sample classification errors across different models. The code for loading and cleaning the data, training the models, and calculating errors is presented in the appendix. 
+
+## Loading and Cleaning the Data
+
+The raw training data set contains 19,622 observations of 160 variables, including the variable being predicted - classe, which has five classes ordered alphabetically from A to E. Class A corresponds to an exercise performed correctly, whereas the other four classes identify an exercise performed incorrectly with each class corresponding to a different type of performance error.
+
+A testing data set, which omits the response variable classe, was also provided, containing 20 observations.
+
+From the raw training data, I created a "cleaned" training set by performing the following steps:
+
+* Deleted 100 variables for which there are no data in the *testing set* (ie, variables for which all 20 observations in the test set are NAs), as these variables cannot be used for prediction.
+* Deleted the first 7 columns of the training data set, which contain the observation number, user name, three time stamp variables, and two "window" variables. I deleted user identification because, while knowing the user may help predict how the exercise is performed, the goal of a project of this nature is to train a model on some users that can then be applied to new users. 
+* Converted the response variable into a factor.
+
+This cleaned training set contains the response variable, 52 numerical predictors, and 0 NAs. The breakdown of observations by class is the following:
+
+```{r class_breakdown, eval = TRUE}
+table(training.cleaned$classe)
+```
+
+## Models: Selection and Fitting
+
+My strategy for model selection is the following: 
+
+1. Split the cleaned training data into a proper training set (80%) and a validation set (20%);
+2. Fit the proper training data using a variety of methods and use the validation set to estimate the out-of-sample classification error rate;
+3. Select the method with the lowest estimated out-of-sample classification error rate.
+
+In the absence of subject matter expertise in the field of exercise science, I will not try to select specific predictors to include in each model. I therefore include all 52 predictors in every model that is fit, even though there are some very strong correlations between pairs of variables, which indicates the possible redundancy of including some of them.
+
+In the following subsections, I detail the work performed to fit models to the training data:
+
+* Linear Discriminant Analysis (LDA)
+* Quadratic Discriminant Analysis (QDA)
+* Multinomial Logit: fit "normally" and then using shrinkage methods (Ridge and Lasso)
+* Decision Tree, with and without Pruning
+* Bagging
+* Random Forest
+* Boosting of Tree Model
+
+The models used vary in terms of flexibility (how much freedom they have to fit the data) and interpretability. In general, more flexible models (like bagging, random forest, or boosting) are less interpretable than less flexible models (LDA, QDA, logit, Lasso). More flexible models also exhibit larger variance, which makes them more sensitive to changes in predictors.
+
+In this project, the goal is to minimize classification error, which in principle should lead to a sacrifice of interpretability.
+
+The out-of-sample accuracy and Kappa statistic (which compares observed accuracy to expected accuracy based on random chance) of the models that were fit are reported below:
+
+```{r summary_accuracy, eval = TRUE}
+accuracy.summary
+```
+
+
+### LDA and QDA
+The LDA and QDA approaches to classification problems estimate the posterior probability that an observation belongs to a particular class given the values of the predictors, and assign the observation to the class with the largest posterior probability. To do this, these approaches assume that the predictors are drawn from a multivariate normal distribution. The difference between LDA and QDA is that the former assumes that the covariance matrix of the predictors is the same across the classes of the predicted variable, while the latter does not. Therefore, QDA will be preferred if the assumption of constant variance does not hold, as LDA will be very biased in this case. Both will suffer if normality of predictors fails.
+
+Note that QDA is more flexible than LDA, as it estimates more parameters, causing it to suffer from higher variance.
+
+The strong improvement of accuracy of the QDA model over the LDA reported above indicates that the assumption that the covariance matrix was constant across classes is incorrect. 
+
+### Multinomial Logit - Standard and with Ridge and Lasso
+The multinomial logit model estimates the log-odds of each class given the observed predictors. This model if usually not employed as LDA and QDA are more popular when the data contain more than two classes. In general (not just when we have more than two classes), discriminant analysis is also more stable if the classes are well separated and the predictors are normally distributed. 
+
+Here, I fit the standard multinomial logit only for the sake of the exercise and to use its performance as a benchmark for the two discriminant analyses types and for the ridge and lasso shrinkage methods.
+
+As the out-of-sample error rates presented above show, the multinomial logit performs worse than LDA and much worse than QDA. Taken together, the results suggest that the predictors are approximately normal (due to QDA and LDA performing better than logit) and that the parameters of the distribution change accross classes (due to QDA performing much better than LDA).
+
+The ridge and lasso models are shrinkage methods that constraint coefficient estimates, reducing variance. They minimize the sum of RSS and a shrinkage penalty that includes a tuning parameter $\lambda$. The difference between the two methods is that, in the lasso penalty, we take the absolute value of the coefficients, and in ridge regression we square them. 
+
+Both methods trade off the minimization of RSS, which requires the coefficients to fit the data well, with the minimization of the penalty term, which requires the coefficients to be small. The larger $\lambda$ is, the smaller the coefficients will be. The smaller it is, the closer we will come to a standard regression. The main difference between the two models is that lasso may cause some coefficients to be equal to 0, while ridge only shrinks them. Lasso thus performs variable selection.
+
+Because the scale of the predictors matters, it is important to standardized the predictors. The function in R employed to fit the ridge and lasso models does this standardization automatically.
+
+To choose the optimal $\lambda$ for the ridge and lasso models, I used 10-fold cross validation: for each $\lambda$ value in the default grid, the model was fit 10 times, with each fit leaving out one of the 10 folds; the fold left out was then used to calculate the classification error, which was then averaged across the 10 fits. The $\lambda$ with the lowest classification error for each method was then selected to train the respective model.
+
+The optimal lambda was 0.01786863 for the ridge model, and 7.916915e-05 for the lasso model, which resulted in few coefficients being equal to zero, but not the same ones for all classes. The graphs below show the misclassification error as a function of the log of $\lambda$. 
+
+```{r ridge_lasso_optimal_lambda, eval = TRUE}
+par(mfrow = c(1,2))
+plot(cv.ridge.fit)
+plot(cv.lasso.fit)
+```
+
+The estimated out-of-sample error rates obtained from the validation set indicate that the lasso, bot not ridge regression, improves upon the standard logit model (but not upon QDA). The superiority of lasso over ridge regression may be due to the fact that some variables truly do not predict some classes. If this is the case, by assigning of coefficient of zero to them, the lasso model avoids overfitting the data. The poor performance of ridge regression may the result of the fact that we have a significant number of observations. 
+
+### Decision Tree and Pruned Tree
+
+The decision tree that I fit has 20 terminal nodes. That is, it divides the predictor space into 20 non-overlapping regions, as can be seen in the figure below:
+
+```{r decision_tree, eval = TRUE}
+# plot the decision tree
+plot(tree.fit)
+text(tree.fit, pretty = 0)
+```
+
+I then checked if prunning might improve the quality of the fit. To that end, I used 10-fold cross validation to assess the optimal number of tree branches, and thus determine if pruning would improve performance. The optimal number of branches, as apparent in the figure below, is 20, which is equal to the number of branches in the original tree.  No pruning was thus performed and therefore no classification error from a pruned tree is reported.
+
+```{r pruning, eval = TRUE}
+# set parameters
+par(mfrow = c(1,2))
+# graph allows us to identify tree with lowest classification error (that with 20 terminal nodes)
+plot(cv.tree.fit$size, cv.tree.fit$dev, type = "b")
+# k is the cost-complexity tuning parameter alpha
+plot(cv.tree.fit$k, cv.tree.fit$dev, type = "b")
+```
+
+The single decision tree's performance was similar to that of LDA and logit. 
+
+As the tree drawn above shows, decision trees are attractive because they are highly interpretable. However, they often fail to yield acurate predictions, as was the case here. This justifies the use of more sophisticated methods, like bagging and random forest. 
+
+### Bagging and Random Forest
+
+Bagging, or bootstrap aggregation, theoretically reduces variance and improves prediction by generating several bootstrapped training sets from the initial training set and training a tree on each bootstrapped set. Prediction for test data is then performed by finding the prediction made by each bootstrapped tree for a given observation of the predictors and taking a majority vote across the trees' predictions: the most common predicted class is chosen. 
+
+The result from applying bagging to our data is a significant improvement over other methods employed so far. 
+
+Random forests improve, in theory, upon bagging, by "decorrelating" trees: like bagging, the random forest method creates several bootstrapped samples, but instead of using all predictors, it uses only a random sample of predictors for each sample tree. This method prevents the trees from all looking the same when there is one strong predictor, so predictions across trees aren't strongly correlated, which reduces variance. Random Forests are particularly useful when there is a large number of correlated predictors, as is the case here. 
+
+The random forest model offers the best out-of-sample accuracy in this project. The graph identifies the most important variables in classification using the random forest model. 
+
+```{r random_forest_var_importance, eval = TRUE}
+# to see importance of each variable - (if we wanted just a table, could use importance(rf.fit)) 
+varImpPlot(rf.fit)
+```
+
+### Boosting
+
+Boosting is a general method that can be applied to decision trees. With boosting, many trees (in this case, 1000) are grown sequentially, each using information from previously grown trees. Ideally, the number of trees should be chosen through cross-validation, but that was too expensive computationally. Perhaps because I did not choose the correct number of trees, the performance of this model out of sample was not as good as that of bagging and random forest.
+
+## Conclusion
+
+After comparing all methods employed, I selected the random forest model to make predictions on the test data.
+
+## Appendix
+
+### Loading and Cleaning the Data
+
+
+```{r data_loading_and_cleaning}
+#load the data
+library(tidyverse)
+training.raw <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+# identify number of missing observations per variable in testing set
+na.testing <- apply(is.na(testing),2,sum)
+
+# create logic vector identifying whether a variable has available data in the testing set (TRUE) or not (FALSE)
+vars.not.na <- na.testing == 0 
+
+#create training set using only variables for which there are observations in testing data to train models
+training.cleaned <- training.raw[, vars.not.na]
+
+#delete first 7 columns containing order number, user name, three timestamp variables, and two window variables 
+training.cleaned <- training.cleaned[,-(1:7)]
+
+# check for nas in training.cleaned
+na.training.cleaned <- apply(is.na(training.cleaned),2,sum)
+
+# convert classe into factor
+training.cleaned$classe <- as.factor(training.cleaned$classe)
+```
+
+### Splitting the cleaned training set into a proper training set and a validation set
+
+```{r training_vs_validation}
+#split training.cleaned into 2 sets: training.proper (80%) and validation (20%)
+library(caret)
+set.seed(1)
+index <- createDataPartition(training.cleaned$classe, p=0.8, list = FALSE)
+training.proper <- training.cleaned[index,]
+validation <- training.cleaned[-index,]
+```
+
+### Training LDA and QDA models
+
+```{r LDA}
+#[superseded because we have validation set for error calculation] prepare resampling method for error calculation; would add trControl = control argument to train function  
+        #control <- trainControl(method = "cv", number = 10)
+        #set.seed(1)
+
+#fit model
+lda.fit <- train(classe ~., data = training.proper, method = "lda")
+#predict on validation set
+lda.pred <- predict(lda.fit, newdata = validation)
+# assess accuracy of classification
+lda.results <- confusionMatrix(lda.pred, validation$classe)
+# record accuracy and kappa value
+accuracy.summary <- tibble('Model' = "LDA", 'Accuracy' = lda.results$overall[1], 'Kappa' =  lda.results$overall[2])
+```
+
+```{r QDA}
+
+#fit model
+qda.fit <- train(classe ~., data = training.proper, method = "qda")
+#predict on validation set
+qda.pred <- predict(qda.fit, newdata = validation)
+# assess accuracy of classification
+qda.results <- confusionMatrix(qda.pred, validation$classe)
+# record accuracy and kappa value in summary matrix
+accuracy.summary <- rbind(accuracy.summary, c("QDA", qda.results$overall[1], qda.results$overall[2]))
+```
+
+### Training standard multinomial logit, ridge and lasso
+
+```{r multinomial_logit}
+library(nnet)
+#fit model
+logit.fit <- multinom(classe~., data = training.proper)
+#predict on validation set
+logit.pred <- predict(logit.fit, newdata = validation)
+# assess accuracy of classification
+logit.results <- confusionMatrix(logit.pred, validation$classe)
+# record accuracy and kappa value
+accuracy.summary <- rbind(accuracy.summary, c("Logit", logit.results$overall[1], logit.results$overall[2]))
+```
+
+
+```{r ridge}
+#load library for glmnet
+library(glmnet)
+#create predictor matrix and response vector (glmnet does not accept formula)
+x <- model.matrix(classe~., training.proper)[,-53]
+y <- training.proper$classe
+#fit the ridge model - alpha = 0 indicates ridge. the model is fit for a variety of lambda values.
+ridge.fit <- glmnet(x,y, family = "multinomial", alpha = 0)
+# use cross validation to pick best lambda
+set.seed(1)
+cv.ridge.fit <- cv.glmnet(x,y, family = "multinomial", alpha = 0, type.measure = "class")
+#identify best lambda
+bestlam <- cv.ridge.fit$lambda.min
+#create matrix of test predictors
+x.test <- model.matrix(classe~., validation)[,-53]
+#formulate predictions for test data, using the fit model and the best lambda
+ridge.pred <- predict(ridge.fit, s = bestlam, newx = x.test, type = "class")
+ridge.pred <- as.factor(ridge.pred[,1])
+#confusion matrix
+ridge.results <- confusionMatrix(ridge.pred, validation$classe)
+accuracy.summary <- rbind(accuracy.summary, c("Logit with Ridge", ridge.results$overall[1], ridge.results$overall[2]))
+```
+
+
+```{r lasso}
+#fit the lasso model using the x predictor matrix and y class vector defined for ridge. alpha = 1 indicates that we are fitting a lasso model. the model is fit for a variety of lambda values.
+lasso.fit <- glmnet(x,y, family = "multinomial", alpha = 1)
+# use cross validation to pick best lambda
+set.seed(1)
+cv.lasso.fit <- cv.glmnet(x,y, family = "multinomial", alpha = 1, type.measure = "class")
+#identify best lambda
+bestlam.lasso <- cv.lasso.fit$lambda.min
+#formulate predictions for test data, using the fit model and the best lambda
+lasso.pred <- predict(lasso.fit, s = bestlam.lasso, newx = x.test, type = "class")
+lasso.pred <- as.factor(lasso.pred[,1])
+#confusion matrix
+lasso.results <- confusionMatrix(lasso.pred, validation$classe)
+accuracy.summary <- rbind(accuracy.summary, c("Logit with Lasso", lasso.results$overall[1], lasso.results$overall[2]))
+```
+
+### Training a decision tree, with and without pruning
+
+```{r tree}
+library(tree)
+# fit the tree
+tree.fit <- tree(classe~., training.proper)
+# formulate predictions
+tree.pred <- predict(tree.fit, newdata = validation, type = "class")
+# confusion matrix
+tree.results <- confusionMatrix(tree.pred, validation$classe)
+accuracy.summary <- rbind(accuracy.summary, c("Tree", tree.results$overall[1], tree.results$overall[2]))
+```
+
+
+```{r tree_prune}
+set.seed(10)
+#argument FUN=prune.misclass indicates we want classification error rate to guide CV and pruning, not default deviance
+cv.tree.fit <- cv.tree(tree.fit, FUN = prune.misclass)
+# now obtain the tree with the optimal node number
+prune.tree.fit <- prune.misclass(tree.fit, best = 20)
+# how well does this pruned tree perform?
+prune.tree.pred <- predict(prune.tree.fit, validation, type = "class")
+prune.tree.results <- confusionMatrix(prune.tree.pred, as.factor(validation$classe))
+#no pruning was performed
+```
+
+### Training with bagging and random forest
+
+
+```{r bagging and random forest}
+## Bagging and random forest
+#remember: bagging is a subcase of random forest where m = p, so random forest function can be used for both
+library(randomForest)
+set.seed(1)
+#create random Forest using all 52 predictors => bagging
+bag.fit <- randomForest(classe~., data = training.proper, mtry = 52, importance = TRUE)
+# make predictions
+bag.pred <- predict(bag.fit, newdata = validation, type = "class")
+# confusion matrix
+bag.results <- confusionMatrix(bag.pred, validation$classe)
+# record accuracy and kappa value
+accuracy.summary <- rbind(accuracy.summary, c("Bagging", bag.results$overall[1], bag.results$overall[2]))
+
+#random forest
+set.seed(1)
+#fit random forest model with mtry = sqrt(52) rounded up to 8
+rf.fit <- randomForest(classe~., data = training.proper, mtry = 8, importance = TRUE)
+# make predictions
+rf.pred <- predict(rf.fit, newdata = validation, type = "class")
+#confusion matrix
+rf.results <- confusionMatrix(rf.pred, validation$classe)
+# record accuracy and kappa value
+accuracy.summary <- rbind(accuracy.summary, c("Random Forest", rf.results$overall[1], rf.results$overall[2]))
+```
+
+### Training with Boosting 
+
+```{r boosting}
+#load library needed for boosting
+library(gbm)
+set.seed(1)
+# fit model with 1000 trees and shrinkage factor 0.01
+boost.fit <- gbm(classe~., data = training.proper, n.trees = 1000, shrinkage = 0.01)
+#prediction - by default, shrinkage parameter lambda = 0.001. Type = "response" yields probabilities
+boost.probs <- predict(boost.fit, newdata=validation, n.trees = 1000, type = "response")
+#identify column corresponding to class/factor with largest probability
+boost.pred0 <- apply(boost.probs,1, which.max)
+# initialize and fill vector with predictions in terms of class
+boost.pred <- vector("character", 3923)
+boost.pred[boost.pred0==1] <- "A"
+boost.pred[boost.pred0==2] <- "B"
+boost.pred[boost.pred0==3] <- "C"
+boost.pred[boost.pred0==4] <- "D"
+boost.pred[boost.pred0==5] <- "E"
+boost.pred <- as.factor(boost.pred)
+boost.results <- confusionMatrix(boost.pred, validation$classe)
+# record accuracy and kappa value
+accuracy.summary <- rbind(accuracy.summary, c("Boosting", boost.results$overall[1], boost.results$overall[2]))
+```
+
+```{r summary_results}
+accuracy.summary$Accuracy <- round(as.numeric(accuracy.summary$Accuracy)*100,2)
+accuracy.summary$Kappa <- round(as.numeric(accuracy.summary$Kappa)*100,2)
+```
